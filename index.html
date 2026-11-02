@@ -648,7 +648,12 @@ function updateCartBadge(){
   const total = Object.values(state.cart).reduce((s,i)=>s+i.qty,0);
   const b = $('cartBadge'); if(b){ b.textContent=total; b.style.display=total>0?'flex':'none'; }
 }
-function openCart(){ renderCart(); setPayMethod('tunai'); openModal('cartModal'); }
+function openCart(){ 
+  state.cashPaid = 0;
+  renderCart(); 
+  setPayMethod('tunai'); 
+  openModal('cartModal'); 
+}
 function renderCart(){
   const items = Object.values(state.cart);
   if(!items.length){
@@ -673,6 +678,7 @@ function changeQty(id, delta){
   else if(p && nq>p.stok){ showToast('Stok tidak cukup','error'); return; }
   else cur.qty = nq;
   renderCart(); updateCartBadge();
+
 }
 
 /* ---------- PEMBAYARAN ---------- */
@@ -689,7 +695,7 @@ function renderPayDetail(){
     box.innerHTML =
       '<div class="cash-box">'+
         '<label>Uang Diterima</label>'+
-        '<input type="number" id="cashInput" placeholder="0" value="'+(state.cashPaid||'')+'" oninput="onCashInput(this.value)">'+
+        '<input type="number" id="cashInput" placeholder="0" value="' + (state.cashPaid > 0 ? state.cashPaid : '') + '" oninput="onCashInput(this.value)">'+
         '<div class="change-row"><span>Kembalian</span><span id="changeVal">Rp 0</span></div>'+
       '</div>';
     onCashInput(state.cashPaid||0);
@@ -811,22 +817,6 @@ function renderMenu(){
   ).join('');
 }
 
-/* ---------- INIT ---------- */
-document.addEventListener('DOMContentLoaded', async () => {
-  // load tema
-  const savedTheme = Number(localStorage.getItem('kasir_theme')||0);
-  applyTheme(isNaN(savedTheme)?0:savedTheme);
-  // load toko
-  loadStore();
-  // render theme picker (untuk halaman menu)
-  renderThemePicker();
-  // jam GMT+8
-  updateClock();
-  setInterval(updateClock, 30000);
-  // load data
-  await loadAll();
-  renderDashboard();
-});
 </script>
 </body>
 </html>
