@@ -461,6 +461,31 @@ function renderThemePicker(){
 
 /* ---------- PENGATURAN TOKO ---------- */
 /* loadStore: ambil dari Sheets */
+  /* Tambahkan fungsi ini agar UI bisa berubah saat disimpan */
+function applyStoreUI() {
+  const { name, logo } = state.store;
+  
+  // Ganti nama di header dan judul tab browser
+  const brandName = $('brandName');
+  if (brandName) brandName.textContent = name;
+  document.title = name + ' — Kasir';
+
+  // Ganti logo di header
+  const brandLogo = $('brandLogo');
+  if (brandLogo) {
+    brandLogo.innerHTML = logo ? `<img src="${logo}" alt="logo">` : '🏪';
+  }
+
+  // Ganti logo di halaman pengaturan
+  const logoPreview = $('logoPreview');
+  if (logoPreview) {
+    logoPreview.innerHTML = logo ? `<img src="${logo}" alt="logo">` : '🏪';
+  }
+
+  // Isi kotak input nama dengan nama toko saat ini
+  const settingNama = $('settingNama');
+  if (settingNama) settingNama.value = name;
+}
 async function loadStore(){
   try{
     const data = await apiGet('pengaturan');
