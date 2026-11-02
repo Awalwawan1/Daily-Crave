@@ -379,5 +379,401 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 <div class="toast" id="toast"></div>
 
 <script>
+/* ============================================================
+   KASIRPRO — app.js (inline)
+   ============================================================ */
+const API_URL = "https://script.google.com/macros/s/AKfycbw0H5x2pjov-jKBB4cqQC3cOR6c-95glo37Nqr77Zvesi8IDzbd0BPuOkpfaGMnP0XD/exec";
+const NAMA_KASIR = "Kasir";
+const TZ = "Asia/Singapore"; // GMT+8
+
+const THEMES = [
+  { name:'Indigo',  c:'#6366f1', d:'#4f46e5', l:'#eef2ff' },
+  { name:'Rose',    c:'#f43f5e', d:'#e11d48', l:'#fff1f2' },
+  { name:'Emerald', c:'#10b981', d:'#059669', l:'#ecfdf5' },
+  { name:'Amber',   c:'#f59e0b', d:'#d97706', l:'#fffbeb' },
+  { name:'Sky',     c:'#0ea5e9', d:'#0284c7', l:'#f0f9ff' },
+  { name:'Violet',  c:'#8b5cf6', d:'#7c3aed', l:'#f5f3ff' },
+  { name:'Slate',   c:'#475569', d:'#334155', l:'#f1f5f9' },
+  { name:'Pink',    c:'#ec4899', d:'#db2777', l:'#fdf2f8' }
+];
+
+let state = {
+  produk: [], transaksi: [], menu: [], cart: {},
+  kategori: 'Semua', search: '', loading: true,
+  payMethod: 'tunai', cashPaid: 0,
+  store: { name: 'KasirPro', logo: '' },
+  themeIndex: 0
+};
+
+const rupiah = n => 'Rp ' + (Number(n)||0).toLocaleString('id-ID');
+const $ = id => document.getElementById(id);
+
+function showToast(msg, type=''){
+  const t = $('toast'); t.textContent = msg;
+  t.className = 'toast ' + type + ' show';
+  clearTimeout(t._timer);
+  t._timer = setTimeout(()=> t.className = 'toast ' + type, 2500);
+}
+function openModal(id){ $(id).classList.add('show'); }
+function closeModal(id){ $(id).classList.remove('show'); }
+
+/* ---------- WAKTU GMT+8 ---------- */
+function nowGMT8(){ return new Date(new Date().toLocaleString('en-US',{timeZone:TZ})); }
+function updateClock(){
+  const el = $('headerTime'); if(!el) return;
+  el.textContent = new Date().toLocaleTimeString('id-ID',{timeZone:TZ,hour:'2-digit',minute:'2-digit'});
+}
+
+/* ---------- API ---------- */
+async function apiGet(action){
+  const res = await fetch(API_URL+'?action='+action,{redirect:'follow'});
+  const json = await res.json();
+  if(json.status!=='success') throw new Error(json.message||'Gagal memuat');
+  return json.data;
+}
+async function apiPost(payload){
+  const res = await fetch(API_URL,{
+    method:'POST',
+    headers:{'Content-Type':'text/plain;charset=utf-8'},
+    body:JSON.stringify(payload), redirect:'follow'
+  });
+  const json = await res.json();
+  if(json.status!=='success') throw new Error(json.message||'Gagal memproses');
+  return json;
+}
+
+/* ---------- TEMA ---------- */
+function applyTheme(i){
+  const t = THEMES[i] || THEMES[0];
+  document.documentElement.style.setProperty('--primary', t.c);
+  document.documentElement.style.setProperty('--primary-dark', t.d);
+  document.documentElement.style.setProperty('--primary-light', t.l);
+  state.themeIndex = i;
+  localStorage.setItem('kasir_theme', String(i));
+  document.querySelectorAll('.theme-chip').forEach((el,x)=> el.classList.toggle('active', x===i));
+}
+function renderThemePicker(){
+  const g = $('themeGrid'); if(!g) return;
+  g.innerHTML = THEMES.map((t,i)=>
+    `<div class="theme-chip ${i===state.themeIndex?'active':''}" style="background:linear-gradient(135deg,${t.c},${t.d})" onclick="applyTheme(${i})"></div>`
+  ).join('');
+}
+
+/* ---------- PENGATURAN TOKO ---------- */
+function loadStore(){
+  try{
+    const s = JSON.parse(localStorage.getItem('kasir_store')||'null');
+    if(s) state.store = { name:s.name||'KasirPro', logo:s.logo||'' };
+  }catch(e){}
+  applyStoreUI();
+}
+function saveStore(){
+  state.store.name = ($('settingNama').value.trim()) || 'KasirPro';
+  localStorage.setItem('kasir_store', JSON.stringify(state.store));
+  applyStoreUI();
+  showToast('Pengaturan tersimpan','success');
+}
+function applyStoreUI(){
+  const { name, logo } = state.store;
+  $('brandName').textContent = name;
+  document.title = name + ' — Kasir';
+  const bl = $('brandLogo');
+  bl.innerHTML = logo ? `<img src="${logo}" alt="logo">` : '🏪';
+  const lp = $('logoPreview'); if(lp) lp.innerHTML = logo ? `<img src="${logo}" alt="logo">` : '🏪';
+  const sn = $('settingNama'); if(sn) sn.value = name;
+}
+function uploadLogo(ev){
+  const f = ev.target.files[0]; if(!f) return;
+  if(f.size > 200*1024){ showToast('Gambar max 200KB','error'); return; }
+  const r = new FileReader();
+  r.onload = e => {
+    state.store.logo = e.target.result;
+    localStorage.setItem('kasir_store', JSON.stringify(state.store));
+    applyStoreUI();
+    showToast('Logo diperbarui','success');
+  };
+  r.readAsDataURL(f);
+}
+
+/* ---------- NAVIGASI ---------- */
+const PAGE_META = {
+  dashboard:{title:'Dashboard', subtitle:'Selamat datang kembali 👋'},
+  kasir:{title:'Kasir', subtitle:'Pilih produk untuk transaksi'},
+  stok:{title:'Stok', subtitle:'Kelola inventaris produk'},
+  menu:{title:'Menu', subtitle:'Pengaturan & daftar menu'}
+};
+function switchPage(page){
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+  $('page-'+page).classList.add('active');
+  const b = document.querySelector('.nav-item[data-page="'+page+'"]'); if(b) b.classList.add('active');
+  $('pageSubtitle').textContent = PAGE_META[page].subtitle;
+  if(page==='dashboard') renderDashboard();
+  if(page==='kasir') renderKasir();
+  if(page==='stok') renderStok();
+  if(page==='menu'){ renderThemePicker(); renderMenu(); }
+}
+
+/* ---------- LOAD ---------- */
+async function loadAll(){
+  try{
+    const [produk,transaksi,menu] = await Promise.all([
+      apiGet('produk'), apiGet('transaksi').catch(()=>[]), apiGet('menu').catch(()=>[])
+    ]);
+    state.produk=produk||[]; state.transaksi=transaksi||[]; state.menu=menu||[];
+    state.loading=false;
+  }catch(err){
+    state.loading=false;
+    showToast('Gagal memuat: '+err.message,'error');
+  }
+}
+
+/* ---------- DASHBOARD ---------- */
+function renderDashboard(){
+  if(state.loading){ $('recentTrx').innerHTML='<div class="loading"><div class="spinner"></div><p>Memuat...</p></div>'; return; }
+  const today = nowGMT8();
+  const isToday = d => new Date(d).toDateString() === today.toDateString();
+  const trxToday = state.transaksi.filter(t=>isToday(t.waktu));
+  const pendapatan = trxToday.reduce((s,t)=>s+(Number(t.total)||0),0);
+  const stokRendah = state.produk.filter(p=>p.stok<=5).length;
+  $('statPendapatan').textContent = rupiah(pendapatan);
+  $('statTransaksi').textContent = new Set(trxToday.map(t=>t.idTransaksi)).size;
+  $('statProduk').textContent = state.produk.length;
+  $('statStokRendah').textContent = stokRendah;
+
+  const groups = {};
+  state.transaksi.forEach(t=>{
+    if(!groups[t.idTransaksi]) groups[t.idTransaksi]={id:t.idTransaksi,waktu:t.waktu,total:0,items:[]};
+    groups[t.idTransaksi].total += Number(t.total)||0;
+    groups[t.idTransaksi].items.push(t.produk+' x'+t.qty);
+  });
+  const recent = Object.values(groups).sort((a,b)=>new Date(b.waktu)-new Date(a.waktu)).slice(0,5);
+  if(!recent.length){ $('recentTrx').innerHTML='<div class="empty-state"><p>Belum ada transaksi</p></div>'; return; }
+  $('recentTrx').innerHTML = '<div class="card">' + recent.map(t=>
+    '<div class="trx-row"><div class="left"><h4>'+t.id+'</h4><p>'+t.items.join(', ')+'</p></div><div class="right">'+rupiah(t.total)+'</div></div>'
+  ).join('') + '</div>';
+}
+
+/* ---------- KASIR ---------- */
+function onSearch(v){ state.search = v; renderKasir(); }
+function setKategori(k){ state.kategori = k; renderKasir(); }
+function renderKasir(){
+  if(state.loading){ $('productGrid').innerHTML='<div class="loading" style="grid-column:1/-1"><div class="spinner"></div><p>Memuat produk...</p></div>'; return; }
+  const kategoriSet = ['Semua', ...new Set(state.produk.map(p=>p.kategori||'Umum'))];
+  $('categoryTabs').innerHTML = kategoriSet.map(k=>
+    '<button class="cat-chip '+(k===state.kategori?'active':'')+'" onclick="setKategori(\''+k+'\')">'+k+'</button>'
+  ).join('');
+  const q = state.search.toLowerCase();
+  const filtered = state.produk.filter(p=>{
+    const mk = state.kategori==='Semua' || (p.kategori||'Umum')===state.kategori;
+    const mq = !q || p.nama.toLowerCase().includes(q) || p.id.toLowerCase().includes(q);
+    return mk && mq;
+  });
+  if(!filtered.length){ $('productGrid').innerHTML='<div class="empty-state" style="grid-column:1/-1"><p>Produk tidak ditemukan</p></div>'; return; }
+  $('productGrid').innerHTML = filtered.map(p=>
+    '<div class="product-card" onclick="addToCart(\''+p.id+'\')">'+
+      '<div class="product-thumb">'+(p.nama||'?').charAt(0).toUpperCase()+'</div>'+
+      '<div class="product-info"><h4>'+p.nama+'</h4>'+
+        '<div class="price">'+rupiah(p.harga)+'</div>'+
+        '<div class="stock">Stok: '+p.stok+'</div></div>'+
+      (p.stok<=0?'<span class="out-of-stock">HABIS</span>':'')+
+    '</div>'
+  ).join('');
+  updateCartBadge();
+}
+
+/* ---------- CART ---------- */
+function addToCart(id){
+  const p = state.produk.find(x=>String(x.id)===String(id)); if(!p) return;
+  if(p.stok<=0){ showToast('Stok habis','error'); return; }
+  const cur = state.cart[id];
+  if(cur && cur.qty>=p.stok){ showToast('Stok tidak cukup','error'); return; }
+  if(cur) cur.qty++; else state.cart[id]={id:p.id,nama:p.nama,harga:p.harga,qty:1};
+  updateCartBadge(); showToast(p.nama+' ditambahkan','success');
+}
+function updateCartBadge(){
+  const total = Object.values(state.cart).reduce((s,i)=>s+i.qty,0);
+  const b = $('cartBadge'); if(b){ b.textContent=total; b.style.display=total>0?'flex':'none'; }
+}
+function openCart(){ renderCart(); setPayMethod('tunai'); openModal('cartModal'); }
+function renderCart(){
+  const items = Object.values(state.cart);
+  if(!items.length){
+    $('cartBody').innerHTML = '<div class="empty-state"><p>Keranjang masih kosong</p></div>';
+    $('cartTotal').textContent = 'Rp 0'; return;
+  }
+  $('cartBody').innerHTML = items.map(it=>
+    '<div class="cart-item"><div class="cart-item-info"><h4>'+it.nama+'</h4><p>'+rupiah(it.harga)+'</p></div>'+
+    '<div class="qty-control"><button class="qty-btn" onclick="changeQty(\''+it.id+'\',-1)">−</button>'+
+    '<span>'+it.qty+'</span>'+
+    '<button class="qty-btn" onclick="changeQty(\''+it.id+'\',1)">+</button></div></div>'
+  ).join('');
+  const total = items.reduce((s,i)=>s+i.qty*i.harga,0);
+  $('cartTotal').textContent = rupiah(total);
+  if(state.payMethod==='tunai') renderPayDetail();
+}
+function changeQty(id, delta){
+  const p = state.produk.find(x=>String(x.id)===String(id));
+  const cur = state.cart[id]; if(!cur) return;
+  const nq = cur.qty + delta;
+  if(nq<=0){ delete state.cart[id]; }
+  else if(p && nq>p.stok){ showToast('Stok tidak cukup','error'); return; }
+  else cur.qty = nq;
+  renderCart(); updateCartBadge();
+}
+
+/* ---------- PEMBAYARAN ---------- */
+function setPayMethod(m){
+  state.payMethod = m;
+  $('payTunai').classList.toggle('active', m==='tunai');
+  $('payQris').classList.toggle('active', m==='qris');
+  renderPayDetail();
+}
+function renderPayDetail(){
+  const box = $('payDetail'); if(!box) return;
+  const total = Object.values(state.cart).reduce((s,i)=>s+i.qty*i.harga,0);
+  if(state.payMethod==='tunai'){
+    box.innerHTML =
+      '<div class="cash-box">'+
+        '<label>Uang Diterima</label>'+
+        '<input type="number" id="cashInput" placeholder="0" value="'+(state.cashPaid||'')+'" oninput="onCashInput(this.value)">'+
+        '<div class="change-row"><span>Kembalian</span><span id="changeVal">Rp 0</span></div>'+
+      '</div>';
+    onCashInput(state.cashPaid||0);
+  } else {
+    box.innerHTML =
+      '<div class="qris-box">'+
+        '<div class="qr-ph">SCAN QRIS<br>(ganti dengan gambar QR toko Anda)</div>'+
+        '<p>Total: <strong>'+rupiah(total)+'</strong></p>'+
+        '<p style="margin-top:4px">Konfirmasi pembayaran setelah pelanggan scan.</p>'+
+      '</div>';
+  }
+}
+function onCashInput(v){
+  state.cashPaid = Number(v)||0;
+  const total = Object.values(state.cart).reduce((s,i)=>s+i.qty*i.harga,0);
+  const kembalian = Math.max(0, state.cashPaid - total);
+  const el = $('changeVal'); if(el) el.textContent = rupiah(kembalian);
+}
+
+/* ---------- CHECKOUT ---------- */
+async function checkout(){
+  const items = Object.values(state.cart);
+  if(!items.length){ showToast('Keranjang kosong','error'); return; }
+  const total = items.reduce((s,i)=>s+i.qty*i.harga,0);
+  if(state.payMethod==='tunai' && state.cashPaid < total){
+    showToast('Uang tunai kurang','error'); return;
+  }
+  const btn = $('btnCheckout');
+  btn.disabled = true; const old = btn.textContent; btn.textContent = 'Memproses...';
+  try{
+    const res = await apiPost({
+      action:'checkout',
+      kasir: NAMA_KASIR,
+      metode: state.payMethod,
+      bayar: state.payMethod==='tunai' ? state.cashPaid : total,
+      items: items.map(i=>({ id:i.id, nama:i.nama, harga:i.harga, qty:i.qty }))
+    });
+    showReceipt(res.idTransaksi, items, total, state.payMethod, state.cashPaid);
+    state.cart = {}; state.cashPaid = 0;
+    updateCartBadge();
+    closeModal('cartModal');
+    await loadAll();
+    renderDashboard(); renderKasir();
+  }catch(err){
+    showToast('Gagal: '+err.message,'error');
+  }finally{
+    btn.disabled = false; btn.textContent = old;
+  }
+}
+
+/* ---------- RECEIPT ---------- */
+function showReceipt(idTrx, items, total, metode, bayar){
+  const now = new Date().toLocaleString('id-ID',{timeZone:TZ, day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
+  const nama = state.store.name;
+  let txt = '========================\n';
+  txt += '  ' + nama.toUpperCase() + '\n';
+  txt += '========================\n';
+  txt += 'ID    : ' + idTrx + '\n';
+  txt += 'Waktu : ' + now + ' (GMT+8)\n';
+  txt += 'Kasir : ' + NAMA_KASIR + '\n';
+  txt += 'Metode: ' + (metode==='tunai'?'Tunai':'QRIS') + '\n';
+  txt += '------------------------\n';
+  items.forEach(it=>{
+    txt += it.nama + '\n';
+    txt += '  ' + it.qty + ' x ' + rupiah(it.harga) + ' = ' + rupiah(it.qty*it.harga) + '\n';
+  });
+  txt += '------------------------\n';
+  txt += 'TOTAL : ' + rupiah(total) + '\n';
+  if(metode==='tunai'){
+    txt += 'Bayar : ' + rupiah(bayar) + '\n';
+    txt += 'Kembali: ' + rupiah(bayar-total) + '\n';
+  }
+  txt += '========================\n';
+  txt += '   Terima Kasih 🙏\n';
+  $('receiptBody').innerHTML = '<div class="receipt">'+txt+'</div>';
+  openModal('receiptModal');
+}
+
+/* ---------- STOK ---------- */
+function renderStok(){
+  if(state.loading){ $('stokList').innerHTML='<div class="loading"><div class="spinner"></div><p>Memuat...</p></div>'; return; }
+  if(!state.produk.length){ $('stokList').innerHTML='<div class="empty-state"><p>Belum ada produk</p></div>'; return; }
+  $('stokList').innerHTML = state.produk.map(p=>{
+    let cls='ok', label=p.stok+' unit';
+    if(p.stok<=0){ cls='out'; label='Habis'; }
+    else if(p.stok<=5){ cls='low'; label=p.stok+' unit'; }
+    return '<div class="stok-item"><div class="stok-item-info">'+
+      '<h4>'+p.nama+'</h4>'+
+      '<p>'+p.id+' • '+rupiah(p.harga)+' • '+(p.kategori||'Umum')+'</p></div>'+
+      '<span class="stok-badge '+cls+'">'+label+'</span></div>';
+  }).join('');
+}
+async function saveProduk(){
+  const id = $('pId').value.trim();
+  const nama = $('pNama').value.trim();
+  const harga = Number($('pHarga').value);
+  const stok = Number($('pStok').value);
+  const kategori = $('pKategori').value;
+  if(!id || !nama || !harga){ showToast('Lengkapi data produk','error'); return; }
+  try{
+    await apiPost({ action:'tambahProduk', id, nama, harga, stok, kategori });
+    showToast('Produk ditambahkan','success');
+    closeModal('addProdukModal');
+    $('pId').value=''; $('pNama').value=''; $('pHarga').value=''; $('pStok').value='';
+    await loadAll(); renderStok();
+  }catch(err){ showToast('Gagal: '+err.message,'error'); }
+}
+
+/* ---------- MENU ---------- */
+function renderMenu(){
+  if(state.loading){ $('menuList').innerHTML='<div class="loading"><div class="spinner"></div><p>Memuat...</p></div>'; return; }
+  if(!state.menu.length){ $('menuList').innerHTML='<div class="empty-state"><p>Belum ada menu tersedia</p></div>'; return; }
+  const g = {};
+  state.menu.forEach(m=>{ const k=m.kategori||'Lainnya'; if(!g[k])g[k]=[]; g[k].push(m); });
+  $('menuList').innerHTML = Object.keys(g).map(k=>
+    '<div class="menu-cat"><h3>'+k+'</h3>'+
+    g[k].map(m=>'<div class="menu-item"><h4>'+m.nama+'</h4><p>'+(m.deskripsi||'')+'</p></div>').join('')+
+    '</div>'
+  ).join('');
+}
+
+/* ---------- INIT ---------- */
+document.addEventListener('DOMContentLoaded', async () => {
+  // load tema
+  const savedTheme = Number(localStorage.getItem('kasir_theme')||0);
+  applyTheme(isNaN(savedTheme)?0:savedTheme);
+  // load toko
+  loadStore();
+  // render theme picker (untuk halaman menu)
+  renderThemePicker();
+  // jam GMT+8
+  updateClock();
+  setInterval(updateClock, 30000);
+  // load data
+  await loadAll();
+  renderDashboard();
+});
+</script>
 </body>
 </html>
