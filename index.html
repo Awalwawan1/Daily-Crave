@@ -460,40 +460,93 @@ function renderThemePicker(){
 }
 
 /* ---------- PENGATURAN TOKO ---------- */
-function loadStore(){
+/* loadStore: ambil dari Sheets */
+async function loadStore(){
   try{
-    const s = JSON.parse(localStorage.getItem('kasir_store')||'null');
-    if(s) state.store = { name:s.name||'KasirPro', logo:s.logo||'' };
-  }catch(e){}
+    const data = await apiGet('pengaturan');
+    state.store = {
+      name: data.nama || 'KasirPro',
+      logo: data.logo || ''
+    };
+  }catch(e){
+    state.store = { name:'KasirPro', logo:'' };
+  }
   applyStoreUI();
 }
-function saveStore(){
-  state.store.name = ($('settingNama').value.trim()) || 'KasirPro';
-  localStorage.setItem('kasir_store', JSON.stringify(state.store));
-  applyStoreUI();
-  showToast('Pengaturan tersimpan','success');
+
+/* saveStore: simpan ke Sheets */
+async function saveStore(){
+  const nama = $('settingNama').value.trim() || 'KasirPro';
+  state.store.name = nama;
+  applyStoreUI(); // update UI dulu biar responsif
+  try{
+    await apiPost({
+      action: 'simpanPengaturan',
+      nama: state.store.name,
+      logo: state.store.logo
+    });
+    showToast('Pengaturan tersimpan (sinkron)','success');
+  }catch(err){
+    showToast('Gagal simpan: '+err.message,'error');
+  }
 }
-function applyStoreUI(){
-  const { name, logo } = state.store;
-  $('brandName').textContent = name;
-  document.title = name + ' — Kasir';
-  const bl = $('brandLogo');
-  bl.innerHTML = logo ? `<img src="${logo}" alt="logo">` : '🏪';
-  const lp = $('logoPreview'); if(lp) lp.innerHTML = logo ? `<img src="${logo}" alt="logo">` : '🏪';
-  const sn = $('settingNama'); if(sn) sn.value = name;
-}
+
+/* uploadLogo: simpan ke Sheets juga */
 function uploadLogo(ev){
-  const f = ev.target.files[0]; if(!f) return;
-  if(f.size > 200*1024){ showToast('Gambar max 200KB','error'); return; }
-  const r = new FileReader();
-  r.onload = e => {
-    state.store.logo = e.target.result;
-    localStorage.setItem('kasir_store', JSON.stringify(state.store));
-    applyStoreUI();
-    showToast('Logo diperbarui','success');
+  const f = ev.target.files[0];
+  if(!f) return;
+
+  // validasi tipe
+  if(!f.type.startsWith('image/')){ showToast('File harus gambar','error'); return; }
+
+  const reader = new FileReader();
+  reader.onload = e => {
+    const img = new Image();
+    img.onload = async () => {
+      // Kompres ke max 200x200 px, JPEG kualitas 0.75
+      const maxSize = 200;
+      let w = img.width, h = img.height;
+      if(w > h){ if(w > maxSize){ h = h * maxSize / w; w = maxSize; } }
+      else     { if(h > maxSize){ w = w * maxSize / h; h = maxSize; } }
+
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+
+      // JPEG kualitas 0.75 → biasanya 8-20KB
+      const compressed = canvas.toDataURL('image/jpeg', 0.75);
+      const sizeKB = Math.round(compressed.length * 0.75 / 1024);
+
+      state.store.logo = compressed;
+      applyStoreUI();
+
+      try{
+        await apiPost({
+          action: 'simpanPengaturan',
+          nama: state.store.name,
+          logo: compressed
+        });
+        showToast(`Logo tersimpan (${sizeKB}KB, sinkron)`, 'success');
+      }catch(err){
+        showToast('Gagal simpan logo: ' + err.message, 'error');
+      }
+    };
+    img.src = e.target.result;
   };
-  r.readAsDataURL(f);
+  reader.readAsDataURL(f);
 }
+
+/* DOMContentLoaded: loadStore jadi async */
+document.addEventListener('DOMContentLoaded', async () => {
+  const savedTheme = Number(localStorage.getItem('kasir_theme')||0);
+  applyTheme(isNaN(savedTheme)?0:savedTheme);
+  renderThemePicker();
+  updateClock();
+  setInterval(updateClock, 30000);
+  await loadStore();   // ← sekarang ambil dari Sheets
+  await loadAll();
+  renderDashboard();
+});
 
 /* ---------- NAVIGASI ---------- */
 const PAGE_META = {
